@@ -1,0 +1,8 @@
+# patcher work dir + auto-downloaded tool
+build/
+apktool.jar
+__pycache__/
+*.pyc
+
+# local build outputs (the GitHub Action uploads these as artifacts instead)
+output/*.jar

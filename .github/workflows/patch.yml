@@ -1,0 +1,95 @@
+name: Patch framework.jar
+
+# Manual trigger. Put your framework.jar in the repo (default: input/framework.jar),
+# commit it, then run this workflow from the Actions tab. Download the patched jar
+# from the run's Artifacts (and optionally from a Release).
+
+on:
+  workflow_dispatch:
+    inputs:
+      input_path:
+        description: "Path to the framework.jar in this repo"
+        required: true
+        default: "input/framework.jar"
+      no_trickystore:
+        description: "Skip TrickyStore (leaf-hack) - patch PIF + Photos + GameProps only"
+        type: boolean
+        required: false
+        default: false
+      generate_mode:
+        description: "Add TrickyStore GENERATE / broken-TEE support (wholesale keystore2 replace, same-version only)"
+        type: boolean
+        required: false
+        default: false
+      make_release:
+        description: "Publish the patched jar as a GitHub Release"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write   # needed only when make_release is true
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Verify input exists
+        run: |
+          if [ ! -f "${{ github.event.inputs.input_path }}" ]; then
+            echo "::error::Input not found: ${{ github.event.inputs.input_path }}"
+            echo "Commit your framework.jar to the repo and set 'input_path' accordingly."
+            exit 1
+          fi
+          ls -la "${{ github.event.inputs.input_path }}"
+
+      - name: Run patcher
+        run: |
+          EXTRA=""
+          if [ "${{ github.event.inputs.no_trickystore }}" = "true" ]; then
+            EXTRA="$EXTRA --no-trickystore"
+          fi
+          if [ "${{ github.event.inputs.generate_mode }}" = "true" ]; then
+            EXTRA="$EXTRA --generate-mode"
+          fi
+          python3 patch.py \
+            --input "${{ github.event.inputs.input_path }}" \
+            --output "output/framework-patched.jar" \
+            $EXTRA
+
+      - name: Show result
+        run: ls -la output/
+
+      - name: Upload patched jar (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: framework-patched
+          path: output/framework-patched.jar
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish Release
+        if: ${{ github.event.inputs.make_release == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: patched-${{ github.run_number }}
+          name: Patched framework.jar #${{ github.run_number }}
+          files: output/framework-patched.jar
+          body: |
+            Patched framework.jar produced by framework-spoof-patcher.
+            Skip TrickyStore: ${{ github.event.inputs.no_trickystore }} | GENERATE mode: ${{ github.event.inputs.generate_mode }}
+
+            Install as root, then reboot:
+              adb push framework-patched.jar /sdcard/
+              su -c 'cp /sdcard/framework-patched.jar /system/framework/framework.jar'
+              su -c 'chmod 644 /system/framework/framework.jar'
+            Configure spoofs via Settings.Secure (see README).
