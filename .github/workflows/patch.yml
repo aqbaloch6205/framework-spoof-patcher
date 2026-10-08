@@ -1,8 +1,7 @@
 name: Patch framework.jar
 
 # Manual trigger. Put your framework.jar in the repo (default: input/framework.jar),
-# commit it, then run this workflow from the Actions tab. Download the patched jar
-# from the run's Artifacts (and optionally from a Release).
+# commit it, then run this workflow from the Actions tab.
 
 on:
   workflow_dispatch:
@@ -11,16 +10,19 @@ on:
         description: "Path to the framework.jar in this repo"
         required: true
         default: "input/framework.jar"
+
       no_trickystore:
         description: "Skip TrickyStore (leaf-hack) - patch PIF + Photos + GameProps only"
         type: boolean
         required: false
         default: false
+
       generate_mode:
         description: "Add TrickyStore GENERATE / broken-TEE support (wholesale keystore2 replace, same-version only)"
         type: boolean
         required: false
         default: false
+
       make_release:
         description: "Publish the patched jar as a GitHub Release"
         type: boolean
@@ -28,11 +30,12 @@ on:
         default: false
 
 permissions:
-  contents: write   # needed only when make_release is true
+  contents: write
 
 jobs:
   patch:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,24 +53,62 @@ jobs:
             echo "Commit your framework.jar to the repo and set 'input_path' accordingly."
             exit 1
           fi
-          ls -la "${{ github.event.inputs.input_path }}"
+
+          echo "Input framework:"
+          ls -lh "${{ github.event.inputs.input_path }}"
+
+      # Diagnostic only:
+      # Checks whether the original Android 13 framework.jar can be
+      # decoded and rebuilt by the same Apktool version before patching.
+      - name: Test pristine framework rebuild
+        run: |
+          set -e
+
+          rm -rf pristine pristine_rebuilt.jar
+
+          echo "=== Pristine decode ==="
+          java -jar apktool.jar d -f \
+            -o pristine \
+            "${{ github.event.inputs.input_path }}"
+
+          echo "=== Pristine rebuild ==="
+          java -jar apktool.jar b -f \
+            -o pristine_rebuilt.jar \
+            pristine
+
+          echo "=== Pristine rebuild SUCCESS ==="
+          ls -lh pristine_rebuilt.jar
 
       - name: Run patcher
         run: |
+          set -e
+
           EXTRA=""
+
           if [ "${{ github.event.inputs.no_trickystore }}" = "true" ]; then
             EXTRA="$EXTRA --no-trickystore"
           fi
+
           if [ "${{ github.event.inputs.generate_mode }}" = "true" ]; then
             EXTRA="$EXTRA --generate-mode"
           fi
+
+          echo "=== Patch configuration ==="
+          echo "Input: ${{ github.event.inputs.input_path }}"
+          echo "Skip TrickyStore: ${{ github.event.inputs.no_trickystore }}"
+          echo "GENERATE mode: ${{ github.event.inputs.generate_mode }}"
+          echo "Release: ${{ github.event.inputs.make_release }}"
+          echo "==========================="
+
           python3 patch.py \
             --input "${{ github.event.inputs.input_path }}" \
             --output "output/framework-patched.jar" \
             $EXTRA
 
       - name: Show result
-        run: ls -la output/
+        run: |
+          echo "=== Output ==="
+          ls -lh output/
 
       - name: Upload patched jar (artifact)
         uses: actions/upload-artifact@v4
@@ -82,14 +123,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: patched-${{ github.run_number }}
-          name: Patched framework.jar #${{ github.run_number }}
+          name: Patched framework.jar # ${{ github.run_number }}
           files: output/framework-patched.jar
           body: |
             Patched framework.jar produced by framework-spoof-patcher.
-            Skip TrickyStore: ${{ github.event.inputs.no_trickystore }} | GENERATE mode: ${{ github.event.inputs.generate_mode }}
+
+            Configuration:
+            Skip TrickyStore: ${{ github.event.inputs.no_trickystore }}
+            GENERATE mode: ${{ github.event.inputs.generate_mode }}
 
             Install as root, then reboot:
               adb push framework-patched.jar /sdcard/
               su -c 'cp /sdcard/framework-patched.jar /system/framework/framework.jar'
               su -c 'chmod 644 /system/framework/framework.jar'
+
             Configure spoofs via Settings.Secure (see README).
