@@ -1,6 +1,7 @@
 name: Patch framework.jar
 
-# Manual trigger. Put your framework.jar in the repo (default: input/framework.jar),
+# Manual trigger.
+# Put framework.jar in the repo, default: input/framework.jar,
 # commit it, then run this workflow from the Actions tab.
 
 on:
@@ -37,48 +38,100 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # ---------------------------------------------------------
+      # 1. Checkout repository
+      # ---------------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ---------------------------------------------------------
+      # 2. Java
+      # ---------------------------------------------------------
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
+      # ---------------------------------------------------------
+      # 3. Verify framework.jar
+      # ---------------------------------------------------------
       - name: Verify input exists
         run: |
-          if [ ! -f "${{ github.event.inputs.input_path }}" ]; then
-            echo "::error::Input not found: ${{ github.event.inputs.input_path }}"
+          set -e
+
+          INPUT="${{ github.event.inputs.input_path }}"
+
+          if [ ! -f "$INPUT" ]; then
+            echo "::error::Input not found: $INPUT"
             echo "Commit your framework.jar to the repo and set 'input_path' accordingly."
             exit 1
           fi
 
           echo "Input framework:"
-          ls -lh "${{ github.event.inputs.input_path }}"
+          ls -lh "$INPUT"
 
-      # Diagnostic only:
-      # Checks whether the original Android 13 framework.jar can be
-      # decoded and rebuilt by the same Apktool version before patching.
+      # ---------------------------------------------------------
+      # 4. Download the exact Apktool version used by patch.py
+      # ---------------------------------------------------------
+      - name: Download Apktool
+        run: |
+          set -e
+
+          APKTOOL_VERSION="2.9.3"
+          APKTOOL_URL="https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar"
+
+          echo "Downloading Apktool ${APKTOOL_VERSION}..."
+
+          curl -L --fail --retry 3 \
+            -o apktool.jar \
+            "$APKTOOL_URL"
+
+          test -s apktool.jar
+
+          echo "Apktool downloaded:"
+          ls -lh apktool.jar
+
+      # ---------------------------------------------------------
+      # 5. Diagnostic:
+      #    Decode and rebuild ORIGINAL framework.jar WITHOUT
+      #    applying any patch.
+      #
+      #    If this fails, the problem is Apktool/framework
+      #    compatibility, not our patch modifications.
+      # ---------------------------------------------------------
       - name: Test pristine framework rebuild
         run: |
           set -e
 
           rm -rf pristine pristine_rebuilt.jar
 
-          echo "=== Pristine decode ==="
+          echo "========================================"
+          echo "PRISTINE FRAMEWORK DECODE"
+          echo "========================================"
+
           java -jar apktool.jar d -f \
             -o pristine \
             "${{ github.event.inputs.input_path }}"
 
-          echo "=== Pristine rebuild ==="
+          echo "========================================"
+          echo "PRISTINE FRAMEWORK REBUILD"
+          echo "========================================"
+
           java -jar apktool.jar b -f \
             -o pristine_rebuilt.jar \
             pristine
 
-          echo "=== Pristine rebuild SUCCESS ==="
+          echo "========================================"
+          echo "PRISTINE REBUILD SUCCESS"
+          echo "========================================"
+
           ls -lh pristine_rebuilt.jar
 
+      # ---------------------------------------------------------
+      # 6. Run actual framework patcher
+      # ---------------------------------------------------------
       - name: Run patcher
         run: |
           set -e
@@ -93,23 +146,50 @@ jobs:
             EXTRA="$EXTRA --generate-mode"
           fi
 
-          echo "=== Patch configuration ==="
-          echo "Input: ${{ github.event.inputs.input_path }}"
-          echo "Skip TrickyStore: ${{ github.event.inputs.no_trickystore }}"
-          echo "GENERATE mode: ${{ github.event.inputs.generate_mode }}"
-          echo "Release: ${{ github.event.inputs.make_release }}"
-          echo "==========================="
+          echo "========================================"
+          echo "PATCH CONFIGURATION"
+          echo "========================================"
+
+          echo "Input:"
+          echo "${{ github.event.inputs.input_path }}"
+
+          echo "Skip TrickyStore:"
+          echo "${{ github.event.inputs.no_trickystore }}"
+
+          echo "GENERATE mode:"
+          echo "${{ github.event.inputs.generate_mode }}"
+
+          echo "Publish Release:"
+          echo "${{ github.event.inputs.make_release }}"
+
+          echo "========================================"
 
           python3 patch.py \
             --input "${{ github.event.inputs.input_path }}" \
             --output "output/framework-patched.jar" \
             $EXTRA
 
+      # ---------------------------------------------------------
+      # 7. Show output
+      # ---------------------------------------------------------
       - name: Show result
         run: |
-          echo "=== Output ==="
-          ls -lh output/
+          set -e
 
+          echo "========================================"
+          echo "PATCHED FRAMEWORK OUTPUT"
+          echo "========================================"
+
+          if [ ! -f output/framework-patched.jar ]; then
+            echo "::error::Patched framework.jar was not created."
+            exit 1
+          fi
+
+          ls -lh output/framework-patched.jar
+
+      # ---------------------------------------------------------
+      # 8. Upload patched framework as GitHub Artifact
+      # ---------------------------------------------------------
       - name: Upload patched jar (artifact)
         uses: actions/upload-artifact@v4
         with:
@@ -118,6 +198,9 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # ---------------------------------------------------------
+      # 9. Optional GitHub Release
+      # ---------------------------------------------------------
       - name: Publish Release
         if: ${{ github.event.inputs.make_release == 'true' }}
         uses: softprops/action-gh-release@v2
@@ -129,10 +212,18 @@ jobs:
             Patched framework.jar produced by framework-spoof-patcher.
 
             Configuration:
-            Skip TrickyStore: ${{ github.event.inputs.no_trickystore }}
-            GENERATE mode: ${{ github.event.inputs.generate_mode }}
+
+            Input:
+            ${{ github.event.inputs.input_path }}
+
+            Skip TrickyStore:
+            ${{ github.event.inputs.no_trickystore }}
+
+            GENERATE mode:
+            ${{ github.event.inputs.generate_mode }}
 
             Install as root, then reboot:
+
               adb push framework-patched.jar /sdcard/
               su -c 'cp /sdcard/framework-patched.jar /system/framework/framework.jar'
               su -c 'chmod 644 /system/framework/framework.jar'
