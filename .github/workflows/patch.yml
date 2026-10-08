@@ -96,9 +96,9 @@ jobs:
       # ---------------------------------------------------------
       # 5. Diagnostic:
       #    Decode and rebuild ORIGINAL framework.jar WITHOUT
-      #    applying any patch.
+      #    applying any patch, using the same API 33 pin as patch.py.
       #
-      #    If this fails, the problem is Apktool/framework
+      #    If this fails, the problem is still Apktool/framework
       #    compatibility, not our patch modifications.
       # ---------------------------------------------------------
       - name: Test pristine framework rebuild
@@ -114,6 +114,13 @@ jobs:
           java -jar apktool.jar d -f \
             -o pristine \
             "${{ github.event.inputs.input_path }}"
+
+          echo "========================================"
+          echo "PIN SDK LEVEL (API 33)"
+          echo "========================================"
+
+          python3 -c "import patch; patch.pin_sdk_level('pristine')"
+          grep -A2 '^sdkInfo' pristine/apktool.yml
 
           echo "========================================"
           echo "PRISTINE FRAMEWORK REBUILD"
