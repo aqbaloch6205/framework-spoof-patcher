@@ -11,6 +11,9 @@ Design goals (this is the "mixed versions / best-effort" build):
     android.app.SpoofBridge helper, so it works across Android versions.
   * The only edit to an existing class is ONE line added to
     ActivityThread.handleBindApplication(). Everything else is brand-new classes.
+  * The decoded apktool.yml is pinned to API 33 before smaling, because a bare
+    framework.jar has no manifest and Apktool otherwise assembles at a low API
+    level, which rejects hidden-API metadata.
 
 Usage:
     python patch.py --input input/framework.jar --output output/framework.jar [--trickystore]
@@ -32,6 +35,9 @@ APKTOOL_URL = (
     "https://github.com/iBotPeaches/Apktool/releases/download/"
     f"v{APKTOOL_VERSION}/apktool_{APKTOOL_VERSION}.jar"
 )
+
+# Target API level of the framework being patched (Android 13).
+TARGET_API = "33"
 
 HOOK_LINE = (
     "    invoke-static/range {p1 .. p1}, "
@@ -66,6 +72,35 @@ def ensure_apktool(explicit):
     log(f"downloading apktool {APKTOOL_VERSION} ...")
     urllib.request.urlretrieve(APKTOOL_URL, local)
     return local
+
+
+def pin_sdk_level(decoded, api=TARGET_API):
+    """
+    Set sdkInfo minSdkVersion/targetSdkVersion in apktool.yml so the smali
+    assembler runs at the framework's real API level. Must run after decode
+    and before any smali is rebuilt.
+    """
+    yml = os.path.join(decoded, "apktool.yml")
+    if not os.path.isfile(yml):
+        die(f"apktool.yml not found in {decoded}")
+
+    with open(yml, "r", encoding="utf-8") as f:
+        text = f.read()
+
+    block = f"sdkInfo:\n  minSdkVersion: '{api}'\n  targetSdkVersion: '{api}'\n"
+    if re.search(r"^sdkInfo:", text, re.M):
+        # Replace the existing sdkInfo block: the header line plus any indented lines below it.
+        text, n = re.subn(r"^sdkInfo:\n(?:[ \t]+.*\n?)*", block, text, count=1, flags=re.M)
+        if n != 1:
+            die("failed to rewrite sdkInfo block in apktool.yml")
+    else:
+        if not text.endswith("\n"):
+            text += "\n"
+        text += block
+
+    with open(yml, "w", encoding="utf-8") as f:
+        f.write(text)
+    log(f"pinned apktool.yml sdkInfo to API {api}")
 
 
 def smali_dirs(decoded):
@@ -317,6 +352,9 @@ def main():
 
     log(f"decoding {args.input} ...")
     run(["java", "-jar", apktool, "d", "-f", "-o", workdir, args.input])
+
+    # Must happen before any smali is assembled, so the assembler runs at API 33.
+    pin_sdk_level(workdir)
 
     engine_dir = copy_engine(workdir)
     inject_activitythread(workdir)
